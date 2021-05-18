@@ -25,6 +25,9 @@
     <ClCompile Include="Common\MathHelper.cpp">
       <Filter>Common</Filter>
     </ClCompile>
+    <ClCompile Include="Transform.cpp">
+      <Filter>MyFramework</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="FrameResource.h" />
@@ -56,6 +59,12 @@
     <ClInclude Include="Common\UploadBuffer.h">
       <Filter>Common</Filter>
     </ClInclude>
+    <ClInclude Include="Transform.h">
+      <Filter>MyFramework</Filter>
+    </ClInclude>
+    <ClInclude Include="Vector3.h">
+      <Filter>MyFramework</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Common">
@@ -63,6 +72,9 @@
     </Filter>
     <Filter Include="Shaders">
       <UniqueIdentifier>{bae8fe88-a389-410e-8322-9f911598582a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="MyFramework">
+      <UniqueIdentifier>{f499dd10-cbba-4511-8bd1-32c2e24d1bc6}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
