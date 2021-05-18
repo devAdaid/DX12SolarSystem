@@ -9,7 +9,6 @@
 #include "Common/UploadBuffer.h"
 #include "Common/GeometryGenerator.h"
 #include "FrameResource.h"
-#include "Waves.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -77,19 +76,14 @@ private:
 	void UpdateCamera(const GameTimer& gt);
 	void UpdateObjectCBs(const GameTimer& gt);
 	void UpdateMainPassCB(const GameTimer& gt);
-	void UpdateWaves(const GameTimer& gt);
 
     void BuildRootSignature();
     void BuildShadersAndInputLayout();
-    void BuildLandGeometry();
-    void BuildWavesGeometryBuffers();
+	void BuildShapeGeometry();
     void BuildPSOs();
     void BuildFrameResources();
     void BuildRenderItems();
 	void DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::vector<RenderItem*>& ritems);
-
-    float GetHillsHeight(float x, float z)const;
-    XMFLOAT3 GetHillsNormal(float x, float z)const;
 
 private:
 
@@ -107,15 +101,11 @@ private:
 
 	std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
 
-	RenderItem* mWavesRitem = nullptr;
-
 	// List of all the render items.
 	std::vector<std::unique_ptr<RenderItem>> mAllRitems;
 
 	// Render items divided by PSO.
 	std::vector<RenderItem*> mRitemLayer[(int)RenderLayer::Count];
-
-	std::unique_ptr<Waves> mWaves;
 
     PassConstants mMainPassCB;
 
@@ -177,14 +167,12 @@ bool DX12SolarSystemApp::Initialize()
     // Reset the command list to prep for initialization commands.
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
-	mWaves = std::make_unique<Waves>(128, 128, 1.0f, 0.03f, 4.0f, 0.2f);
-
     BuildRootSignature();
     BuildShadersAndInputLayout();
-	BuildLandGeometry();
-    BuildWavesGeometryBuffers();
+	//BuildLandGeometry();
+    //BuildWavesGeometryBuffers();
+	BuildShapeGeometry();
     BuildRenderItems();
-	BuildRenderItems();
     BuildFrameResources();
 	BuildPSOs();
 
@@ -229,7 +217,6 @@ void DX12SolarSystemApp::Update(const GameTimer& gt)
 
 	UpdateObjectCBs(gt);
 	UpdateMainPassCB(gt);
-	UpdateWaves(gt);
 }
 
 void DX12SolarSystemApp::Draw(const GameTimer& gt)
@@ -416,41 +403,6 @@ void DX12SolarSystemApp::UpdateMainPassCB(const GameTimer& gt)
 	currPassCB->CopyData(0, mMainPassCB);
 }
 
-void DX12SolarSystemApp::UpdateWaves(const GameTimer& gt)
-{
-	// Every quarter second, generate a random wave.
-	static float t_base = 0.0f;
-	if((mTimer.TotalTime() - t_base) >= 0.25f)
-	{
-		t_base += 0.25f;
-
-		int i = MathHelper::Rand(4, mWaves->RowCount() - 5);
-		int j = MathHelper::Rand(4, mWaves->ColumnCount() - 5);
-
-		float r = MathHelper::RandF(0.2f, 0.5f);
-
-		mWaves->Disturb(i, j, r);
-	}
-
-	// Update the wave simulation.
-	mWaves->Update(gt.DeltaTime());
-
-	// Update the wave vertex buffer with the new solution.
-	auto currWavesVB = mCurrFrameResource->WavesVB.get();
-	for(int i = 0; i < mWaves->VertexCount(); ++i)
-	{
-		Vertex v;
-
-		v.Pos = mWaves->Position(i);
-        v.Color = XMFLOAT4(DirectX::Colors::Blue);
-
-		currWavesVB->CopyData(i, v);
-	}
-
-	// Set the dynamic VB of the wave renderitem to the current frame VB.
-	mWavesRitem->Geo->VertexBufferGPU = currWavesVB->Resource();
-}
-
 void DX12SolarSystemApp::BuildRootSignature()
 {
     // Root parameter can be a table, root descriptor or root constants.
@@ -494,59 +446,69 @@ void DX12SolarSystemApp::BuildShadersAndInputLayout()
     };
 }
 
-void DX12SolarSystemApp::BuildLandGeometry()
+void DX12SolarSystemApp::BuildShapeGeometry()
 {
 	GeometryGenerator geoGen;
-	GeometryGenerator::MeshData grid = geoGen.CreateGrid(160.0f, 160.0f, 50, 50);
+	GeometryGenerator::MeshData sphere = geoGen.CreateSphere(1, 20, 20);
+	GeometryGenerator::MeshData ring = geoGen.CreateRing(3, 2, 20, 20);
 
 	//
-	// Extract the vertex elements we are interested and apply the height function to
-	// each vertex.  In addition, color the vertices based on their height so we have
-	// sandy looking beaches, grassy low hills, and snow mountain peaks.
+	// We are concatenating all the geometry into one big vertex/index buffer.  So
+	// define the regions in the buffer each submesh covers.
 	//
 
-	std::vector<Vertex> vertices(grid.Vertices.size());
-	for(size_t i = 0; i < grid.Vertices.size(); ++i)
+	// Cache the vertex offsets to each object in the concatenated vertex buffer.
+	UINT sphereVertexOffset = 0;
+	UINT ringVertexOffset = (UINT)sphere.Vertices.size();
+
+	// Cache the starting index for each object in the concatenated index buffer.
+	UINT sphereIndexOffset = 0;
+	UINT ringIndexOffset = (UINT)sphere.Indices32.size();
+
+	// Define the SubmeshGeometry that cover different 
+	// regions of the vertex/index buffers.
+	SubmeshGeometry sphereSubmesh;
+	sphereSubmesh.IndexCount = (UINT)sphere.Indices32.size();
+	sphereSubmesh.StartIndexLocation = sphereIndexOffset;
+	sphereSubmesh.BaseVertexLocation = sphereVertexOffset;
+
+	SubmeshGeometry ringSubmesh;
+	ringSubmesh.IndexCount = (UINT)ring.Indices32.size();
+	ringSubmesh.StartIndexLocation = ringIndexOffset;
+	ringSubmesh.BaseVertexLocation = ringVertexOffset;
+	//
+	// Extract the vertex elements we are interested in and pack the
+	// vertices of all the meshes into one vertex buffer.
+	//
+
+	auto totalVertexCount =
+		sphere.Vertices.size() + 
+		ring.Vertices.size();
+
+	std::vector<Vertex> vertices(totalVertexCount);
+
+	UINT k = 0;
+	for (size_t i = 0; i < sphere.Vertices.size(); ++i, ++k)
 	{
-		auto& p = grid.Vertices[i].Position;
-		vertices[i].Pos = p;
-		vertices[i].Pos.y = GetHillsHeight(p.x, p.z);
-
-        // Color the vertex based on its height.
-        if(vertices[i].Pos.y < -10.0f)
-        {
-            // Sandy beach color.
-            vertices[i].Color = XMFLOAT4(1.0f, 0.96f, 0.62f, 1.0f);
-        }
-        else if(vertices[i].Pos.y < 5.0f)
-        {
-            // Light yellow-green.
-            vertices[i].Color = XMFLOAT4(0.48f, 0.77f, 0.46f, 1.0f);
-        }
-        else if(vertices[i].Pos.y < 12.0f)
-        {
-            // Dark yellow-green.
-            vertices[i].Color = XMFLOAT4(0.1f, 0.48f, 0.19f, 1.0f);
-        }
-        else if(vertices[i].Pos.y < 20.0f)
-        {
-            // Dark brown.
-            vertices[i].Color = XMFLOAT4(0.45f, 0.39f, 0.34f, 1.0f);
-        }
-        else
-        {
-            // White snow.
-            vertices[i].Color = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-        }
+		vertices[k].Pos = sphere.Vertices[i].Position;
+		vertices[k].Color = XMFLOAT4(DirectX::Colors::Crimson);
 	}
-    
-	const UINT vbByteSize = (UINT)vertices.size() * sizeof(Vertex);
 
-	std::vector<std::uint16_t> indices = grid.GetIndices16();
+	for (size_t i = 0; i < ring.Vertices.size(); ++i, ++k)
+	{
+		vertices[k].Pos = ring.Vertices[i].Position;
+		vertices[k].Color = XMFLOAT4(DirectX::Colors::Lime);
+	}
+
+	std::vector<std::uint16_t> indices;
+	indices.insert(indices.end(), std::begin(sphere.GetIndices16()), std::end(sphere.GetIndices16()));
+	indices.insert(indices.end(), std::begin(ring.GetIndices16()), std::end(ring.GetIndices16()));
+
+	const UINT vbByteSize = (UINT)vertices.size() * sizeof(Vertex);
 	const UINT ibByteSize = (UINT)indices.size() * sizeof(std::uint16_t);
 
 	auto geo = std::make_unique<MeshGeometry>();
-	geo->Name = "landGeo";
+	geo->Name = "shapeGeo";
 
 	ThrowIfFailed(D3DCreateBlob(vbByteSize, &geo->VertexBufferCPU));
 	CopyMemory(geo->VertexBufferCPU->GetBufferPointer(), vertices.data(), vbByteSize);
@@ -565,70 +527,10 @@ void DX12SolarSystemApp::BuildLandGeometry()
 	geo->IndexFormat = DXGI_FORMAT_R16_UINT;
 	geo->IndexBufferByteSize = ibByteSize;
 
-	SubmeshGeometry submesh;
-	submesh.IndexCount = (UINT)indices.size();
-	submesh.StartIndexLocation = 0;
-	submesh.BaseVertexLocation = 0;
+	geo->DrawArgs["sphere"] = sphereSubmesh;
+	geo->DrawArgs["ring"] = ringSubmesh;
 
-	geo->DrawArgs["grid"] = submesh;
-
-	mGeometries["landGeo"] = std::move(geo);
-}
-
-void DX12SolarSystemApp::BuildWavesGeometryBuffers()
-{
-	std::vector<std::uint16_t> indices(3 * mWaves->TriangleCount()); // 3 indices per face
-	assert(mWaves->VertexCount() < 0x0000ffff);
-
-	// Iterate over each quad.
-	int m = mWaves->RowCount();
-	int n = mWaves->ColumnCount();
-	int k = 0;
-	for(int i = 0; i < m - 1; ++i)
-	{
-		for(int j = 0; j < n - 1; ++j)
-		{
-			indices[k] = i*n + j;
-			indices[k + 1] = i*n + j + 1;
-			indices[k + 2] = (i + 1)*n + j;
-
-			indices[k + 3] = (i + 1)*n + j;
-			indices[k + 4] = i*n + j + 1;
-			indices[k + 5] = (i + 1)*n + j + 1;
-
-			k += 6; // next quad
-		}
-	}
-
-	UINT vbByteSize = mWaves->VertexCount()*sizeof(Vertex);
-	UINT ibByteSize = (UINT)indices.size()*sizeof(std::uint16_t);
-
-	auto geo = std::make_unique<MeshGeometry>();
-	geo->Name = "waterGeo";
-
-	// Set dynamically.
-	geo->VertexBufferCPU = nullptr;
-	geo->VertexBufferGPU = nullptr;
-
-	ThrowIfFailed(D3DCreateBlob(ibByteSize, &geo->IndexBufferCPU));
-	CopyMemory(geo->IndexBufferCPU->GetBufferPointer(), indices.data(), ibByteSize);
-
-	geo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
-		mCommandList.Get(), indices.data(), ibByteSize, geo->IndexBufferUploader);
-
-	geo->VertexByteStride = sizeof(Vertex);
-	geo->VertexBufferByteSize = vbByteSize;
-	geo->IndexFormat = DXGI_FORMAT_R16_UINT;
-	geo->IndexBufferByteSize = ibByteSize;
-
-	SubmeshGeometry submesh;
-	submesh.IndexCount = (UINT)indices.size();
-	submesh.StartIndexLocation = 0;
-	submesh.BaseVertexLocation = 0;
-
-	geo->DrawArgs["grid"] = submesh;
-
-	mGeometries["waterGeo"] = std::move(geo);
+	mGeometries[geo->Name] = std::move(geo);
 }
 
 void DX12SolarSystemApp::BuildPSOs()
@@ -677,12 +579,13 @@ void DX12SolarSystemApp::BuildFrameResources()
     for(int i = 0; i < gNumFrameResources; ++i)
     {
         mFrameResources.push_back(std::make_unique<FrameResource>(md3dDevice.Get(),
-            1, (UINT)mAllRitems.size(), mWaves->VertexCount()));
+            1, (UINT)mAllRitems.size()));
     }
 }
 
 void DX12SolarSystemApp::BuildRenderItems()
 {
+	/*
 	auto wavesRitem = std::make_unique<RenderItem>();
 	wavesRitem->World = MathHelper::Identity4x4();
 	wavesRitem->ObjCBIndex = 0;
@@ -709,6 +612,30 @@ void DX12SolarSystemApp::BuildRenderItems()
 
 	mAllRitems.push_back(std::move(wavesRitem));
 	mAllRitems.push_back(std::move(gridRitem));
+	*/
+
+	// ±¸
+	auto sunRitem = std::make_unique<RenderItem>();
+	sunRitem->World = MathHelper::Identity4x4();
+	sunRitem->ObjCBIndex = 0;
+	sunRitem->Geo = mGeometries["shapeGeo"].get();
+	sunRitem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+	sunRitem->IndexCount = sunRitem->Geo->DrawArgs["sphere"].IndexCount;
+	sunRitem->StartIndexLocation = sunRitem->Geo->DrawArgs["sphere"].StartIndexLocation;
+	sunRitem->BaseVertexLocation = sunRitem->Geo->DrawArgs["sphere"].BaseVertexLocation;
+	mRitemLayer[(int)RenderLayer::Opaque].push_back(sunRitem.get());
+	mAllRitems.push_back(std::move(sunRitem));
+
+	auto ringRitem = std::make_unique<RenderItem>();
+	ringRitem->World = MathHelper::Identity4x4();
+	ringRitem->ObjCBIndex = 0;
+	ringRitem->Geo = mGeometries["shapeGeo"].get();
+	ringRitem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+	ringRitem->IndexCount = ringRitem->Geo->DrawArgs["ring"].IndexCount;
+	ringRitem->StartIndexLocation = ringRitem->Geo->DrawArgs["ring"].StartIndexLocation;
+	ringRitem->BaseVertexLocation = ringRitem->Geo->DrawArgs["ring"].BaseVertexLocation;
+	mRitemLayer[(int)RenderLayer::Opaque].push_back(ringRitem.get());
+	mAllRitems.push_back(std::move(ringRitem));
 }
 
 void DX12SolarSystemApp::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::vector<RenderItem*>& ritems)
@@ -733,23 +660,4 @@ void DX12SolarSystemApp::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, con
 
 		cmdList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
 	}
-}
-
-float DX12SolarSystemApp::GetHillsHeight(float x, float z)const
-{
-    return 0.3f*(z*sinf(0.1f*x) + x*cosf(0.1f*z));
-}
-
-XMFLOAT3 DX12SolarSystemApp::GetHillsNormal(float x, float z)const
-{
-    // n = (-df/dx, 1, -df/dz)
-    XMFLOAT3 n(
-        -0.03f*z*cosf(0.1f*x) - 0.3f*cosf(0.1f*z),
-        1.0f,
-        -0.3f*sinf(0.1f*x) + 0.03f*x*sinf(0.1f*z));
-
-    XMVECTOR unitNormal = XMVector3Normalize(XMLoadFloat3(&n));
-    XMStoreFloat3(&n, unitNormal);
-
-    return n;
 }

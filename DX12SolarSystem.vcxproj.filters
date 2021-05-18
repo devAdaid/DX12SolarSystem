@@ -61,5 +61,13 @@
     <Filter Include="Common">
       <UniqueIdentifier>{8fb084e2-552f-4071-84bd-50c83b63d341}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Shaders">
+      <UniqueIdentifier>{bae8fe88-a389-410e-8322-9f911598582a}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="Shaders\color.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
   </ItemGroup>
 </Project>
