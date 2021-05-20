@@ -9,6 +9,10 @@
 #include "Common/UploadBuffer.h"
 #include "Common/GeometryGenerator.h"
 #include "FrameResource.h"
+#include "Transform.h"
+#include "Vector3.h"
+#include "MeshRendererComponent.h"
+#include <queue>
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -22,11 +26,6 @@ struct RenderItem
 {
 	RenderItem() = default;
 
-	// World matrix of the shape that describes the object's local space
-	// relative to the world space, which defines the position, orientation,
-	// and scale of the object in the world.
-	XMFLOAT4X4 World = MathHelper::Identity4x4();
-
 	// Dirty flag indicating the object data has changed and we need to update the constant buffer.
 	// Because we have an object cbuffer for each FrameResource, we have to apply the
 	// update to each FrameResource.  Thus, when we modify obect data we should set 
@@ -37,6 +36,7 @@ struct RenderItem
 	UINT ObjCBIndex = -1;
 
 	MeshGeometry* Geo = nullptr;
+	Transform* Transform = nullptr;
 
 	// Primitive topology.
 	D3D12_PRIMITIVE_TOPOLOGY PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -79,6 +79,7 @@ private:
 
     void BuildRootSignature();
     void BuildShadersAndInputLayout();
+	void BuildScene();
 	void BuildShapeGeometry();
     void BuildPSOs();
     void BuildFrameResources();
@@ -106,6 +107,8 @@ private:
 
 	// Render items divided by PSO.
 	std::vector<RenderItem*> mRitemLayer[(int)RenderLayer::Count];
+
+	Transform mSceneRoot = Transform(nullptr);
 
     PassConstants mMainPassCB;
 
@@ -171,6 +174,7 @@ bool DX12SolarSystemApp::Initialize()
     BuildShadersAndInputLayout();
 	//BuildLandGeometry();
     //BuildWavesGeometryBuffers();
+	BuildScene();
 	BuildShapeGeometry();
     BuildRenderItems();
     BuildFrameResources();
@@ -358,11 +362,18 @@ void DX12SolarSystemApp::UpdateObjectCBs(const GameTimer& gt)
 	auto currObjectCB = mCurrFrameResource->ObjectCB.get();
 	for(auto& e : mAllRitems)
 	{
+		if (e->Transform->IsDirty())
+		{
+			e->NumFramesDirty = gNumFrameResources;
+			e->Transform->IsDirty(false);
+		}
+
 		// Only update the cbuffer data if the constants have changed.  
 		// This needs to be tracked per frame resource.
 		if(e->NumFramesDirty > 0)
 		{
-			XMMATRIX world = XMLoadFloat4x4(&e->World);
+			auto worldMatrix = e->Transform->WorldMatrix();
+			XMMATRIX world = XMLoadFloat4x4(&worldMatrix);
 
 			ObjectConstants objConstants;
 			XMStoreFloat4x4(&objConstants.World, XMMatrixTranspose(world));
@@ -444,6 +455,13 @@ void DX12SolarSystemApp::BuildShadersAndInputLayout()
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
     };
+}
+void DX12SolarSystemApp::BuildScene()
+{
+	Transform* sphere = new Transform(Vector3(5,0,0), Vector3(0,0,0), Vector3(1,1,1), &mSceneRoot);
+	sphere->MeshRendererComponent = new MeshRendererComponent("sphere");
+	Transform* ring = new Transform(sphere);
+	ring->MeshRendererComponent = new MeshRendererComponent("ring");
 }
 
 void DX12SolarSystemApp::BuildShapeGeometry()
@@ -614,28 +632,31 @@ void DX12SolarSystemApp::BuildRenderItems()
 	mAllRitems.push_back(std::move(gridRitem));
 	*/
 
-	// ±¸
-	auto sunRitem = std::make_unique<RenderItem>();
-	sunRitem->World = MathHelper::Identity4x4();
-	sunRitem->ObjCBIndex = 0;
-	sunRitem->Geo = mGeometries["shapeGeo"].get();
-	sunRitem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	sunRitem->IndexCount = sunRitem->Geo->DrawArgs["sphere"].IndexCount;
-	sunRitem->StartIndexLocation = sunRitem->Geo->DrawArgs["sphere"].StartIndexLocation;
-	sunRitem->BaseVertexLocation = sunRitem->Geo->DrawArgs["sphere"].BaseVertexLocation;
-	mRitemLayer[(int)RenderLayer::Opaque].push_back(sunRitem.get());
-	mAllRitems.push_back(std::move(sunRitem));
-
-	auto ringRitem = std::make_unique<RenderItem>();
-	ringRitem->World = MathHelper::Identity4x4();
-	ringRitem->ObjCBIndex = 0;
-	ringRitem->Geo = mGeometries["shapeGeo"].get();
-	ringRitem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	ringRitem->IndexCount = ringRitem->Geo->DrawArgs["ring"].IndexCount;
-	ringRitem->StartIndexLocation = ringRitem->Geo->DrawArgs["ring"].StartIndexLocation;
-	ringRitem->BaseVertexLocation = ringRitem->Geo->DrawArgs["ring"].BaseVertexLocation;
-	mRitemLayer[(int)RenderLayer::Opaque].push_back(ringRitem.get());
-	mAllRitems.push_back(std::move(ringRitem));
+	queue<Transform*> q;
+	q.push(&mSceneRoot);
+	UINT cbIndex = 0;
+	while (!q.empty())
+	{
+		auto transform = q.front();
+		if (transform->MeshRendererComponent != nullptr)
+		{
+			auto renderItem = make_unique<RenderItem>();
+			renderItem->ObjCBIndex = cbIndex++;
+			renderItem->Transform = transform;
+			renderItem->Geo = mGeometries["shapeGeo"].get();
+			renderItem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+			renderItem->IndexCount = renderItem->Geo->DrawArgs[transform->MeshRendererComponent->SubMeshName].IndexCount;
+			renderItem->StartIndexLocation = renderItem->Geo->DrawArgs[transform->MeshRendererComponent->SubMeshName].StartIndexLocation;
+			renderItem->BaseVertexLocation = renderItem->Geo->DrawArgs[transform->MeshRendererComponent->SubMeshName].BaseVertexLocation;
+			mRitemLayer[(int)RenderLayer::Opaque].push_back(renderItem.get());
+			mAllRitems.push_back(std::move(renderItem));
+		}
+		for (auto& child : transform->Childs())
+		{
+			q.push(child);
+		}
+		q.pop();
+	}
 }
 
 void DX12SolarSystemApp::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::vector<RenderItem*>& ritems)

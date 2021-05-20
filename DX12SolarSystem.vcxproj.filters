@@ -65,6 +65,12 @@
     <ClInclude Include="Vector3.h">
       <Filter>MyFramework</Filter>
     </ClInclude>
+    <ClInclude Include="MeshRendererComponent.h">
+      <Filter>MyFramework</Filter>
+    </ClInclude>
+    <ClInclude Include="Component.h">
+      <Filter>MyFramework</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Common">
