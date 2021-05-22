@@ -250,7 +250,7 @@ void DX12SolarSystemApp::Draw(const GameTimer& gt)
 		D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
 
 	// Clear the back buffer and depth buffer.
-	mCommandList->ClearRenderTargetView(CurrentBackBufferView(), Colors::LightSteelBlue, 0, nullptr);
+	mCommandList->ClearRenderTargetView(CurrentBackBufferView(), Colors::Navy, 0, nullptr);
 	mCommandList->ClearDepthStencilView(DepthStencilView(), D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
 
 	// Specify the buffers we are going to render to.
@@ -458,10 +458,16 @@ void DX12SolarSystemApp::BuildShadersAndInputLayout()
 }
 void DX12SolarSystemApp::BuildScene()
 {
-	Transform* sphere = new Transform(Vector3(5,0,0), Vector3(0,0,0), Vector3(1,1,1), &mSceneRoot);
-	sphere->MeshRendererComponent = new MeshRendererComponent("sphere");
-	Transform* ring = new Transform(sphere);
+	Transform* sun = new Transform(Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(3, 3, 3), &mSceneRoot);
+	sun->MeshRendererComponent = new MeshRendererComponent("sun");
+
+	Transform* saturn = new Transform(Vector3(10,0,0), Vector3(0,0,0), Vector3(1,1,1), &mSceneRoot);
+	saturn->MeshRendererComponent = new MeshRendererComponent("saturn");
+	Transform* ring = new Transform(saturn);
 	ring->MeshRendererComponent = new MeshRendererComponent("ring");
+
+	Transform* ring2 = new Transform(Vector3(0, 0, 0), Vector3(0, 0, 3.14f), Vector3(1, 1, 1), saturn);
+	ring2->MeshRendererComponent = new MeshRendererComponent("ring");
 }
 
 void DX12SolarSystemApp::BuildShapeGeometry()
@@ -476,19 +482,26 @@ void DX12SolarSystemApp::BuildShapeGeometry()
 	//
 
 	// Cache the vertex offsets to each object in the concatenated vertex buffer.
-	UINT sphereVertexOffset = 0;
-	UINT ringVertexOffset = (UINT)sphere.Vertices.size();
+	UINT sunVertexOffset = 0;
+	UINT saturnVertexOffset = (UINT)sphere.Vertices.size();
+	UINT ringVertexOffset = saturnVertexOffset + (UINT)sphere.Vertices.size();
 
 	// Cache the starting index for each object in the concatenated index buffer.
-	UINT sphereIndexOffset = 0;
-	UINT ringIndexOffset = (UINT)sphere.Indices32.size();
+	UINT sunIndexOffset = 0;
+	UINT saturnIndexOffset = (UINT)sphere.Indices32.size();
+	UINT ringIndexOffset = saturnIndexOffset + (UINT)sphere.Indices32.size();
 
 	// Define the SubmeshGeometry that cover different 
 	// regions of the vertex/index buffers.
-	SubmeshGeometry sphereSubmesh;
-	sphereSubmesh.IndexCount = (UINT)sphere.Indices32.size();
-	sphereSubmesh.StartIndexLocation = sphereIndexOffset;
-	sphereSubmesh.BaseVertexLocation = sphereVertexOffset;
+	SubmeshGeometry sunSubmesh;
+	sunSubmesh.IndexCount = (UINT)sphere.Indices32.size();
+	sunSubmesh.StartIndexLocation = sunIndexOffset;
+	sunSubmesh.BaseVertexLocation = sunVertexOffset;
+
+	SubmeshGeometry saturnSubmesh;
+	saturnSubmesh.IndexCount = (UINT)sphere.Indices32.size();
+	saturnSubmesh.StartIndexLocation = saturnIndexOffset;
+	saturnSubmesh.BaseVertexLocation = saturnVertexOffset;
 
 	SubmeshGeometry ringSubmesh;
 	ringSubmesh.IndexCount = (UINT)ring.Indices32.size();
@@ -500,7 +513,8 @@ void DX12SolarSystemApp::BuildShapeGeometry()
 	//
 
 	auto totalVertexCount =
-		sphere.Vertices.size() + 
+		sphere.Vertices.size() +
+		sphere.Vertices.size() +
 		ring.Vertices.size();
 
 	std::vector<Vertex> vertices(totalVertexCount);
@@ -511,14 +525,20 @@ void DX12SolarSystemApp::BuildShapeGeometry()
 		vertices[k].Pos = sphere.Vertices[i].Position;
 		vertices[k].Color = XMFLOAT4(DirectX::Colors::Crimson);
 	}
+	for (size_t i = 0; i < sphere.Vertices.size(); ++i, ++k)
+	{
+		vertices[k].Pos = sphere.Vertices[i].Position;
+		vertices[k].Color = XMFLOAT4(DirectX::Colors::Chocolate);
+	}
 
 	for (size_t i = 0; i < ring.Vertices.size(); ++i, ++k)
 	{
 		vertices[k].Pos = ring.Vertices[i].Position;
-		vertices[k].Color = XMFLOAT4(DirectX::Colors::Lime);
+		vertices[k].Color = XMFLOAT4(DirectX::Colors::BurlyWood);
 	}
 
 	std::vector<std::uint16_t> indices;
+	indices.insert(indices.end(), std::begin(sphere.GetIndices16()), std::end(sphere.GetIndices16()));
 	indices.insert(indices.end(), std::begin(sphere.GetIndices16()), std::end(sphere.GetIndices16()));
 	indices.insert(indices.end(), std::begin(ring.GetIndices16()), std::end(ring.GetIndices16()));
 
@@ -545,8 +565,9 @@ void DX12SolarSystemApp::BuildShapeGeometry()
 	geo->IndexFormat = DXGI_FORMAT_R16_UINT;
 	geo->IndexBufferByteSize = ibByteSize;
 
-	geo->DrawArgs["sphere"] = sphereSubmesh;
+	geo->DrawArgs["sun"] = sunSubmesh;
 	geo->DrawArgs["ring"] = ringSubmesh;
+	geo->DrawArgs["saturn"] = saturnSubmesh;
 
 	mGeometries[geo->Name] = std::move(geo);
 }
